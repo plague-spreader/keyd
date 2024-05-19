@@ -568,7 +568,7 @@ any of the following options:
 	1 = Capslock
 
 	2 = Scrolllock
-
+	
 	
 	Note: if you pass a string to this option the activated LED will be Numlock due to
 	how atoi() works

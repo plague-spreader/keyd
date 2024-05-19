@@ -519,6 +519,7 @@ struct device_event *device_read_event(struct device *dev)
 
 void device_set_led(const struct device *dev, int led, int state)
 {
+    dbg2("device_set_led(%s, %d, %d);", dev->id, led, state);
 	struct input_event ev = {
 		.type = EV_LED,
 		.code = led,

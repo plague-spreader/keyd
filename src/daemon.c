@@ -1,4 +1,9 @@
+#include "device.h"
 #include "keyd.h"
+#include "log.h"
+#include <linux/input-event-codes.h>
+#include <linux/input.h>
+#include <stdint.h>
 
 struct config_ent {
 	struct config config;
@@ -15,6 +20,14 @@ static uint8_t keystate[256];
 static int listeners[32];
 static size_t nr_listeners = 0;
 static struct keyboard *active_kbd = NULL;
+
+// num/caps/scroll lock tracking to avoid collisions with LED layer indicator
+// since xset supports up to 32 LEDs, a 32bit integer shall be enough to keep
+// track of the LED/lock state
+static uint32_t lock_state = 0;
+
+// has a layer been activated?
+static int active_layers;
 
 static void free_configs()
 {
@@ -50,6 +63,22 @@ static void send_key(uint8_t code, uint8_t state)
 {
 	keystate[code] = state;
 	vkbd_send_key(vkbd, code, state);
+}
+
+static void set_led(const struct device *dev, int led, int new_state)
+{
+	// Function to handle correctly the LED of the layer indicator
+	dbg("set_led(%s, %d, %d)", dev->id, led, new_state);
+	dbg("active_layers = %d", active_layers);
+	dbg("lock_state = %d", lock_state);
+	dbg("lock_state & (1 << led) = %d", lock_state & (1 << led));
+	if (active_kbd != NULL && led == active_kbd->config.indicator_led) {
+		// if the num/caps/scroll lock is on or a layer is active then do NOT
+		// turn off the indicator LED
+		new_state |= !!((lock_state & (1 << led)) || active_layers);
+		dbg("new_state = %d", new_state);
+	}
+	device_set_led(dev, led, new_state);
 }
 
 static void add_listener(int con)
@@ -100,7 +129,7 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	size_t n = 0;
 
 	if (kbd->config.layer_indicator) {
-		int active_layers = 0;
+		active_layers = 0;
 
 		for (i = 1; i < kbd->config.nr_layers; i++)
 			if (kbd->config.layers[i].type != LT_LAYOUT && kbd->layer_state[i].active) {
@@ -110,7 +139,7 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 
 		for (i = 0; i < device_table_sz; i++)
 			if (device_table[i].data == kbd)
-				device_set_led(&device_table[i], kbd->config.indicator_led, active_layers);
+				set_led(&device_table[i], kbd->config.indicator_led, active_layers);
 	}
 
 	if (!nr_listeners)
@@ -506,11 +535,18 @@ static int event_handler(struct event *ev)
 			 * Propagate LED events received by the virtual device from userspace
 			 * to all grabbed devices.
 			 *
-			 * NOTE/TODO: Account for potential layer_indicator interference
+			 * To account for potential layer_indicator interference, the led status is saved
 			 */
+
+			if (ev->devev->pressed) {
+				lock_state |= (1 << ev->devev->code);
+			} else {
+				lock_state &= 0xffffffff ^ (1 << ev->devev->code);
+			}
+
 			for (i = 0; i < device_table_sz; i++)
 				if (device_table[i].data)
-					device_set_led(&device_table[i], ev->devev->code, ev->devev->pressed);
+					set_led(&device_table[i], ev->devev->code, ev->devev->pressed);
 		}
 
 		break;
